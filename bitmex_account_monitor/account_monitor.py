@@ -2,8 +2,10 @@ import sys
 import atexit
 import signal
 
+from concurrent.futures import ThreadPoolExecutor
+
 from time import sleep
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timezone
 
 import json
 from dateutil.parser import parse
@@ -35,20 +37,12 @@ def _launder_datetime_string(s: str):
 class AccountMonitor:
 
     def __init__(self):
-        self.instance_name = settings.API_KEY[:8]
-
         # Client to the BitMex exchange.
         logger.info("Connecting to BitMEX exchange: %s %s" % (settings.BASE_URL, settings.SYMBOL))
-        self.bitmex_client = BitMEXClient(
-            settings.BASE_URL, settings.SYMBOL,
-            api_key=settings.API_KEY, api_secret=settings.API_SECRET,
-            use_websocket=True, use_rest=True,
-            subscriptions=["instrument", "order", "position", "margin"],
-            order_id_prefix="",
-            agent_name=settings.REST_AGENT_NAME,
-            http_timeout=settings.HTTP_TIMEOUT_SECONDS,
-            expiration_seconds=settings.API_EXPIRATION_SECONDS
-        )
+        self.bitmex_client = self._create_bitmex_client()
+        self.bitmex_client_refreshed_time = now()
+        self.is_refreshing = False
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ws_refresh")
 
         # Redis client.
         logger.info("Connecting to Redis %s:%d/%d" % (settings.REDIS_HOST, settings.REDIS_PORT, settings.REDIS_DB))
@@ -69,6 +63,28 @@ class AccountMonitor:
         signal.signal(signal.SIGTERM, self.exit)
 
         self.sanity_check()
+
+    @staticmethod
+    def _create_bitmex_client():
+        return BitMEXClient(
+            settings.BASE_URL, settings.SYMBOL,
+            api_key=settings.API_KEY, api_secret=settings.API_SECRET,
+            use_websocket=True, use_rest=True,
+            subscriptions=["instrument", "order", "position", "margin"],
+            order_id_prefix="",
+            agent_name=settings.REST_AGENT_NAME,
+            http_timeout=settings.HTTP_TIMEOUT_SECONDS,
+            expiration_seconds=settings.API_EXPIRATION_SECONDS
+        )
+
+    def _refresh_bitmex_client(self):
+        self.bitmex_client_refreshed_time = now()
+        logger.info("Now refreshing BitMEXClient.")
+        self.is_refreshing = True
+        self.bitmex_client.close()
+        self.bitmex_client = self._create_bitmex_client()
+        self.is_refreshing = False
+        logger.info("Refreshed BitMEXClient.")
 
     def sanity_check(self):
         # Ensure market is open.
@@ -97,6 +113,8 @@ class AccountMonitor:
         except Exception as e:
             logger.info("Unable to close BitMEX client: %s", str(e))
 
+        self.executor.shutdown(wait=False)
+
         # Now the clients are all down.
         self.is_running = False
 
@@ -104,8 +122,16 @@ class AccountMonitor:
         sys.exit()
 
     def _is_age_less_or_equal(self, table_name: str, std_time: datetime, max_allowable_seconds: float):
+        count = 0
+        while self.is_refreshing:
+            count += 1
+            if (settings.MAX_REFRESH_WAIT_SECONDS * 10) < count:
+                raise Exception("BitMEX Client Refresh ERROR?")
+            sleep(0.1)
+
         ws_updated = self.bitmex_client.get_last_ws_update(table_name)
         if not ws_updated:
+            # No updates received.
             return False
         return (std_time - ws_updated).total_seconds() <= max_allowable_seconds
 
@@ -230,24 +256,29 @@ class AccountMonitor:
                 serialized_position = self.serialize_dict('position', current_position, position_std_time)
                 logger.info("[%s] Current position is read: %s", loop_id, serialized_position)
                 self.redis.set(settings.REDIS_ACCOUNT_POSITIONS_KEY, serialized_position)
+                logger.info("[%s] Current position written to redis.", loop_id)
 
                 open_orders_std_time = now()
                 open_orders = self.read_open_orders(loop_id, open_orders_std_time)
                 open_orders_dict = self.open_orders_to_dict(open_orders)
                 serialized_open_orders = self.serialize_dict('openOrders', open_orders_dict, open_orders_std_time)
-                logger.info("[%s] Open orders are read: %s", loop_id, serialized_open_orders)
+                logger.info("[%s] Open orders are read: %d", loop_id, len(open_orders.bids) + len(open_orders.asks))
                 self.redis.set(settings.REDIS_ACCOUNT_OPEN_ORDERS_KEY, serialized_open_orders)
+                logger.info("[%s] Open orders written to redis.", loop_id)
 
                 balance_std_time = now()
                 balances = self.read_balances(loop_id, balance_std_time)
                 serialized_balances = self.serialize_dict('balances', balances, balance_std_time)
                 logger.info("[%s] Balances are read: %s", loop_id, serialized_balances)
                 self.redis.set(settings.REDIS_ACCOUNT_BALANCES_KEY, serialized_balances)
+                logger.info("[%s] Balances written to redis.", loop_id)
 
                 loop_elapsed_seconds = (now() - loop_start_time).total_seconds()
                 logger.info("LOOP[%s] (SUMMARY) ElapsedSeconds: %.2f", loop_id, loop_elapsed_seconds)
-                # TODO refreshing bitmex client.
                 # TODO save to mongo.
+
+                if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
+                    self.executor.submit(self._refresh_bitmex_client)
                 sleep(settings.LOOP_INTERVAL_SECONDS)
         except Exception as e:
             import sys

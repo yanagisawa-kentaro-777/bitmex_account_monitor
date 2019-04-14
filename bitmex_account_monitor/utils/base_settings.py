@@ -37,7 +37,7 @@ SYMBOL = "XBTUSD"
 
 
 def _get_float_from_env(key: str, default_value: float):
-    s = os.environ[key]
+    s = os.environ.get(key)
     if not s or (len(s.strip()) <= 0):
         return default_value
     return float(s.strip())
@@ -45,6 +45,9 @@ def _get_float_from_env(key: str, default_value: float):
 
 INITIAL_SLEEP_SECONDS = _get_float_from_env('INITIAL_SLEEP_SECONDS', 0)
 LOOP_INTERVAL_SECONDS = _get_float_from_env('LOOP_INTERVAL_SECONDS', 3)
+WS_REFRESH_INTERVAL = _get_float_from_env('WS_REFRESH_INTERVAL', 600)
+
+MAX_REFRESH_WAIT_SECONDS = 15
 
 WS_POSITION_MAX_AGE_SECONDS = 8
 WS_ORDER_MAX_AGE_SECONDS = 8
