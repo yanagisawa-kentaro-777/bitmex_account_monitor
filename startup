@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+
+import time
+from bitmex_account_monitor import account_monitor
+from bitmex_account_monitor.utils.settings import settings
+
+time.sleep(settings.INITIAL_SLEEP_SECONDS)
+
+# Start market maker server.
+account_monitor.start()
