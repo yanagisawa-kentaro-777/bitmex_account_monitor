@@ -19,8 +19,8 @@ REDIS_HOST = "redis"
 REDIS_PORT = 6379
 REDIS_DB = 0
 
-REDIS_ACCOUNT_OPEN_ORDERS_KEY = 'from-account-monitor:{}:open-orders'.format(BITMEX_ACCOUNT_ID)
 REDIS_ACCOUNT_POSITIONS_KEY = 'from-account-monitor:{}:positions'.format(BITMEX_ACCOUNT_ID)
+REDIS_ACCOUNT_OPEN_ORDERS_KEY = 'from-account-monitor:{}:open-orders'.format(BITMEX_ACCOUNT_ID)
 REDIS_ACCOUNT_BALANCES_KEY = 'from-account-monitor:{}:balances'.format(BITMEX_ACCOUNT_ID)
 
 
@@ -40,13 +40,18 @@ def _get_float_from_env(key: str, default_value: float):
     s = os.environ[key]
     if not s or (len(s.strip()) <= 0):
         return default_value
-    float(s.strip())
+    return float(s.strip())
 
 
 INITIAL_SLEEP_SECONDS = _get_float_from_env('INITIAL_SLEEP_SECONDS', 0)
 LOOP_INTERVAL_SECONDS = _get_float_from_env('LOOP_INTERVAL_SECONDS', 3)
 
+WS_POSITION_MAX_AGE_SECONDS = 8
+WS_ORDER_MAX_AGE_SECONDS = 8
+WS_BALANCE_MAX_AGE_SECONDS = 15
 
+REST_AGENT_NAME = 'account-monitor'
+HTTP_TIMEOUT_SECONDS = 10
 API_EXPIRATION_SECONDS = 3600
 
 

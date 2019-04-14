@@ -1,6 +1,6 @@
 import logging
 from logging.handlers import RotatingFileHandler
-from bitmex_account_monitor.settings import settings
+from bitmex_account_monitor.utils.settings import settings
 
 
 def setup_custom_logger(name, log_level=settings.LOG_LEVEL):
