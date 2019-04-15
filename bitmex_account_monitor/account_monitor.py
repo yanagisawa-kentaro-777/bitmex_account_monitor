@@ -27,7 +27,7 @@ def now():
 
 
 def _format_datetime(dt: datetime):
-    return dt.strftime("%Y-%m-%d_%H:%M:%S_%Z")
+    return dt.strftime("%Y-%m-%d_%H:%M:%S_%z")
 
 
 def _launder_datetime_string(s: str):
