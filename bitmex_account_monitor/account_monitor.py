@@ -393,8 +393,9 @@ class AccountMonitor:
                 self.redis.set(settings.REDIS_ACCOUNT_BALANCES_KEY, serialized_balances)
                 logger.info("[%s] Balances written to redis.", loop_id)
 
-                log_data.append(("account.withdrawable-balance", balances["withdrawableBalance"]))
-                log_data.append(("account.wallet-balance", balances["walletBalance"]))
+                satoshi_to_btc = 100000000.0
+                log_data.append(("account.withdrawable-btc-balance", balances["withdrawableBalance"] / satoshi_to_btc))
+                log_data.append(("account.wallet-btc-balance", balances["walletBalance"] / satoshi_to_btc))
 
                 loop_elapsed_seconds = (now() - loop_start_time).total_seconds()
                 logger.info("LOOP[%s] (SUMMARY) ElapsedSeconds: %.2f", loop_id, loop_elapsed_seconds)
