@@ -276,10 +276,10 @@ class AccountMonitor:
         logger.info("Last logged %s updated: %s", unit, s)
 
     def _load_last_trade_logged_time(self, unit):
-        result = self.account_monitor_db["trade_logged_datetime"].find_one({'unit': unit})
-        if result is not None:
-            logger.info("Last logged %s loaded: %s", unit, result)
-            return datetime.strptime("%Y%m%d_%H%M%S_%z")
+        s = self.account_monitor_db["trade_logged_datetime"].find_one({'unit': unit})
+        if s is not None:
+            logger.info("Last logged %s loaded: %s", unit, s)
+            return datetime.strptime(s, "%Y%m%d_%H%M%S_%z")
         else:
             return None
 
