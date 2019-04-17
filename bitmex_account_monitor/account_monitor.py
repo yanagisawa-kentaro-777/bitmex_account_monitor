@@ -5,7 +5,7 @@ import signal
 from concurrent.futures import ThreadPoolExecutor
 
 from time import sleep
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import json
 from dateutil.parser import parse
@@ -14,6 +14,7 @@ import pymongo
 import redis
 
 from pybitmex import *
+from graphitefeeder import GraphiteClient
 
 from bitmex_account_monitor.utils import log, constants
 from bitmex_account_monitor.utils.settings import settings
@@ -51,6 +52,11 @@ class AccountMonitor:
         # MongoDB client.
         logger.info("Connecting to %s" % settings.MONGO_DB_URI)
         self.mongo_client = pymongo.MongoClient(settings.MONGO_DB_URI)
+        self.account_monitor_db = self.mongo_client["system:account-monitor"]
+
+        # Graphite.
+        logger.info("Connecting to Graphite %s: %d", settings.GRAPHITE_HOST, settings.GRAPHITE_PORT)
+        self.graphite = GraphiteClient(settings.GRAPHITE_HOST, settings.GRAPHITE_PORT)
 
         # Now the clients are all up.
         self.is_running = True
@@ -112,6 +118,11 @@ class AccountMonitor:
             self.bitmex_client.close()
         except Exception as e:
             logger.info("Unable to close BitMEX client: %s", str(e))
+
+        try:
+            self.graphite.close()
+        except Exception as e:
+            logger.info("Unable to close Graphite client: %s", str(e))
 
         self.executor.shutdown(wait=False)
 
@@ -238,6 +249,109 @@ class AccountMonitor:
     def serialize_dict(key: str, content_dict, std_time: datetime):
         return json.dumps({key: content_dict, "timestamp": _format_datetime(std_time)})
 
+    def _get_trade_history_of_minute(self, year, month, day, hour, minute):
+        filter_obj = self.bitmex_client.create_hourly_filter(year, month, day, hour)
+        filter_obj['timestamp.uu'] = "{:02}".format(minute)
+        return self.bitmex_client.rest_get_raw_trade_history_of_account(filter_obj)
+
+    def _get_trade_history_of_hour(self, year, month, day, hour):
+        filter_obj = self.bitmex_client.create_hourly_filter(year, month, day, hour)
+        return self.bitmex_client.rest_get_raw_trade_history_of_account(filter_obj)
+
+    @staticmethod
+    def _round_datetime_to_minute(dt):
+        return datetime(dt.year, dt.month, dt.day, dt.hour, dt.min, 0, 0, dt.tzinfo)
+
+    @staticmethod
+    def _round_datetime_to_hour(dt):
+        return datetime(dt.year, dt.month, dt.day, dt.hour, 0, 0, 0, dt.tzinfo)
+
+    def _save_last_trade_logged_time(self, dt, unit):
+        s = dt.strftime("%Y%m%d_%H%M%S_%z")
+        self.account_monitor_db["trade_logged_datetime"].update(
+            {'unit': unit},
+            {'unit': unit, 'datetime': s},
+            upsert=True
+        )
+        logger.info("Last logged %s updated: %s", unit, s)
+
+    def _load_last_trade_logged_time(self, unit):
+        result = self.account_monitor_db["trade_logged_datetime"].find_one({'unit': unit})
+        if result is not None:
+            logger.info("Last logged %s loaded: %s", unit, result)
+            return datetime.strptime("%Y%m%d_%H%M%S_%z")
+        else:
+            return None
+
+    def _save_last_trade_logged_minute(self, dt):
+        self._save_last_trade_logged_time(dt, 'minute')
+
+    def _load_last_trade_logged_minute(self):
+        return self._load_last_trade_logged_time('minute')
+
+    def _save_last_trade_logged_hour(self, dt):
+        self._save_last_trade_logged_time(dt, 'hour')
+
+    def _load_last_trade_logged_hour(self):
+        return self._load_last_trade_logged_time('hour')
+
+    def log_hourly_trade_count_of_account(self, std_datetime):
+        tuples = []
+        sleep_seconds_per_request = 2.0
+
+        last_logged_hour = self._load_last_trade_logged_hour()
+        if last_logged_hour is not None:
+            target_hour = last_logged_hour + timedelta(hours=1)
+        else:
+            target_hour = self._round_datetime_to_hour(std_datetime - timedelta(hours=3))
+        end_hour = std_datetime - timedelta(hours=1)
+        while target_hour <= end_hour:
+            each_timestamp = int(target_hour.timestamp())
+            trades_of_hour = self._get_trade_history_of_hour(
+                target_hour.year, target_hour.month, target_hour.day, target_hour.hour)
+            num_buys = len([t for t in trades_of_hour if t["side"] == "Buy"])
+            num_sells = len([t for t in trades_of_hour if t["side"] == "Sell"])
+            tuples.append(("account.trade-count.hourly.buy", (each_timestamp, num_buys)))
+            tuples.append(("account.trade-count.hourly.sell", (each_timestamp, num_sells)))
+
+            sleep(sleep_seconds_per_request)
+            target_hour = target_hour + timedelta(hours=1)
+        self._save_last_trade_logged_hour(target_hour - timedelta(hours=1))
+        if 0 < len(tuples):
+            logger.info("Logging %d hourly trades.", len(tuples))
+            self.graphite.batch_send_tuples(tuples)
+        else:
+            logger.info("No hourly trades.")
+
+    def log_minutely_trades_of_account(self, std_datetime):
+        tuples = []
+        sleep_seconds_per_request = 2.0
+
+        last_logged_minute = self._load_last_trade_logged_minute()
+        if last_logged_minute is not None:
+            target_minute = last_logged_minute + timedelta(minutes=1)
+        else:
+            target_minute = self._round_datetime_to_minute(std_datetime - timedelta(minutes=10))
+        end_minute = std_datetime - timedelta(minutes=1)
+        while target_minute <= end_minute:
+            trades_of_minute = self._get_trade_history_of_minute(
+                target_minute.year, target_minute.month, target_minute.day, target_minute.hour, target_minute.minute)
+            for each_trade in trades_of_minute:
+                each_timestamp = int(parse(each_trade["timestamp"]).timestamp())
+                each_price = float(each_trade["price"])
+                if each_trade["side"] == "Buy":
+                    tuples.append(("account.trade.buy", (each_timestamp, each_price)))
+                else:
+                    tuples.append(("account.trade.sell", (each_timestamp, each_price)))
+            sleep(sleep_seconds_per_request)
+            target_minute = target_minute + timedelta(minutes=1)
+        self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
+        if 0 < len(tuples):
+            logger.info("Logging %d minutely trades.", len(tuples))
+            self.graphite.batch_send_tuples(tuples)
+        else:
+            logger.info("No minutely trades.")
+
     def run_loop(self):
         loop_count = 0
         try:
@@ -250,6 +364,7 @@ class AccountMonitor:
                     loop_id, constants.VERSION, settings.LOOP_INTERVAL_SECONDS, settings.BITMEX_ACCOUNT_ID
                 )
 
+                log_data = []
                 # Recognize our current position. This value is to be negative when we have a short position.
                 position_std_time = now()
                 current_position = self.read_current_position(loop_id, position_std_time)
@@ -257,6 +372,8 @@ class AccountMonitor:
                 logger.info("[%s] Current position is read: %s", loop_id, serialized_position)
                 self.redis.set(settings.REDIS_ACCOUNT_POSITIONS_KEY, serialized_position)
                 logger.info("[%s] Current position written to redis.", loop_id)
+
+                log_data.append(("account.position", current_position))
 
                 open_orders_std_time = now()
                 open_orders = self.read_open_orders(loop_id, open_orders_std_time)
@@ -266,6 +383,9 @@ class AccountMonitor:
                 self.redis.set(settings.REDIS_ACCOUNT_OPEN_ORDERS_KEY, serialized_open_orders)
                 logger.info("[%s] Open orders written to redis.", loop_id)
 
+                log_data.append(("account.open-bids", len(open_orders.bids)))
+                log_data.append(("account.open-asks", len(open_orders.asks)))
+
                 balance_std_time = now()
                 balances = self.read_balances(loop_id, balance_std_time)
                 serialized_balances = self.serialize_dict('balances', balances, balance_std_time)
@@ -273,9 +393,14 @@ class AccountMonitor:
                 self.redis.set(settings.REDIS_ACCOUNT_BALANCES_KEY, serialized_balances)
                 logger.info("[%s] Balances written to redis.", loop_id)
 
+                log_data.append(("account.withdrawable-balance", balances["withdrawableBalance"]))
+                log_data.append(("account.wallet-balance", balances["walletBalance"]))
+
                 loop_elapsed_seconds = (now() - loop_start_time).total_seconds()
                 logger.info("LOOP[%s] (SUMMARY) ElapsedSeconds: %.2f", loop_id, loop_elapsed_seconds)
-                # TODO save to mongo.
+
+                log_data.append(("system.account-monitor.operation.loop-time", loop_elapsed_seconds))
+                self.graphite.batch_send(log_data)
 
                 if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
                     self.executor.submit(self._refresh_bitmex_client)
