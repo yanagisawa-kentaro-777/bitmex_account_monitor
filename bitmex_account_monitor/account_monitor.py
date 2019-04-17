@@ -321,7 +321,7 @@ class AccountMonitor:
             logger.info("Logging %d hourly trades.", len(tuples))
             self.graphite.batch_send_tuples(tuples)
         else:
-            logger.info("No hourly trades.")
+            logger.info("No hourly trades to log.")
 
     def log_minutely_trades_of_account(self, std_datetime):
         tuples = []
@@ -350,7 +350,7 @@ class AccountMonitor:
             logger.info("Logging %d minutely trades.", len(tuples))
             self.graphite.batch_send_tuples(tuples)
         else:
-            logger.info("No minutely trades.")
+            logger.info("No minutely trades to log.")
 
     def run_loop(self):
         loop_count = 0
@@ -401,6 +401,10 @@ class AccountMonitor:
 
                 log_data.append(("system.account-monitor.operation.loop-time", loop_elapsed_seconds))
                 self.graphite.batch_send(log_data)
+
+                trades_std_time = now()
+                self.log_minutely_trades_of_account(trades_std_time)
+                self.log_hourly_trade_count_of_account(trades_std_time)
 
                 if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
                     self.executor.submit(self._refresh_bitmex_client)
