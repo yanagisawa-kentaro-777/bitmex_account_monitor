@@ -23,6 +23,9 @@ REDIS_ACCOUNT_POSITIONS_KEY = 'from-account-monitor:{}:positions'.format(BITMEX_
 REDIS_ACCOUNT_OPEN_ORDERS_KEY = 'from-account-monitor:{}:open-orders'.format(BITMEX_ACCOUNT_ID)
 REDIS_ACCOUNT_BALANCES_KEY = 'from-account-monitor:{}:balances'.format(BITMEX_ACCOUNT_ID)
 
+GRAPHITE_HOST = "graphite"
+GRAPHITE_PORT = 2004
+
 
 ########################################################################################################################
 # Target

@@ -16,7 +16,7 @@ services:
       - BITMEX_API_KEY=${BITMEX_API_KEY}
       - BITMEX_API_SECRET=${BITMEX_API_SECRET}
       - INITIAL_SLEEP_SECONDS=0
-      - LOOP_INTERVAL_SECONDS=1.25
+      - LOOP_INTERVAL_SECONDS=2.25
     depends_on:
       - mongo
       - redis
