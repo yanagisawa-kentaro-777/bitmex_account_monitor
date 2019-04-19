@@ -333,20 +333,22 @@ class AccountMonitor:
         else:
             target_minute = self._round_datetime_to_minute(std_datetime - timedelta(minutes=10))
         end_minute = std_datetime - timedelta(minutes=1)
-        buys = 0
-        sells = 0
         while target_minute <= end_minute:
             trades_of_minute = self._get_trade_history_of_minute(
                 target_minute.year, target_minute.month, target_minute.day, target_minute.hour, target_minute.minute)
+            buys = 0
+            sells = 0
             for each_trade in trades_of_minute:
                 each_timestamp = int(parse(each_trade["timestamp"]).timestamp())
                 each_price = float(each_trade["price"])
                 if each_trade["side"] == "Buy":
                     tuples.append(("account.trade.buy", (each_timestamp, each_price)))
-                    tuples.append(("account.trade-count.minutely.buy", (each_timestamp, 1)))
+                    buys += 1
                 else:
                     tuples.append(("account.trade.sell", (each_timestamp, each_price)))
-                    tuples.append(("account.trade-count.minutely.sell", (each_timestamp, 1)))
+                    sells += 1
+            tuples.append(("account.trade-count.minutely.buy", (target_minute.time(), buys)))
+            tuples.append(("account.trade-count.minutely.sell", (target_minute.time(), sells)))
             sleep(sleep_seconds_per_request)
             target_minute = target_minute + timedelta(minutes=1)
         self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
