@@ -250,8 +250,7 @@ class AccountMonitor:
         return json.dumps({key: content_dict, "timestamp": _format_datetime(std_time)})
 
     def _get_trade_history_of_minute(self, year, month, day, hour, minute):
-        filter_obj = self.bitmex_client.create_hourly_filter(year, month, day, hour)
-        filter_obj['timestamp.uu'] = "{:02}".format(minute)
+        filter_obj = self.bitmex_client.create_minutely_filter(year, month, day, hour, minute)
         return self.bitmex_client.rest_get_raw_trade_history_of_account(filter_obj)
 
     def _get_trade_history_of_hour(self, year, month, day, hour):
@@ -295,6 +294,7 @@ class AccountMonitor:
     def _load_last_trade_logged_hour(self):
         return self._load_last_trade_logged_time('hour')
 
+    # TODO erase this?
     def log_hourly_trade_count_of_account(self, std_datetime):
         tuples = []
         sleep_seconds_per_request = 2.0
@@ -333,6 +333,8 @@ class AccountMonitor:
         else:
             target_minute = self._round_datetime_to_minute(std_datetime - timedelta(minutes=10))
         end_minute = std_datetime - timedelta(minutes=1)
+        buys = 0
+        sells = 0
         while target_minute <= end_minute:
             trades_of_minute = self._get_trade_history_of_minute(
                 target_minute.year, target_minute.month, target_minute.day, target_minute.hour, target_minute.minute)
@@ -341,13 +343,15 @@ class AccountMonitor:
                 each_price = float(each_trade["price"])
                 if each_trade["side"] == "Buy":
                     tuples.append(("account.trade.buy", (each_timestamp, each_price)))
+                    tuples.append(("account.trade-count.minutely.buy", (each_timestamp, 1)))
                 else:
                     tuples.append(("account.trade.sell", (each_timestamp, each_price)))
+                    tuples.append(("account.trade-count.minutely.sell", (each_timestamp, 1)))
             sleep(sleep_seconds_per_request)
             target_minute = target_minute + timedelta(minutes=1)
         self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
         if 0 < len(tuples):
-            logger.info("Logging %d minutely trades.", len(tuples))
+            logger.info("Logging %d minutely trades.", len(tuples) // 2)
             self.graphite.batch_send_tuples(tuples)
         else:
             logger.info("No minutely trades to log.")
