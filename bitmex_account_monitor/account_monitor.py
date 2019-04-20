@@ -324,16 +324,6 @@ class AccountMonitor:
             logger.info("No hourly trades to log.")
 
     def log_minutely_trades_of_account(self, std_datetime):
-        # TODO erase.
-        logger.info("Experimental start!!!")
-        log_time = now().time()
-        metrics = [
-            ("account.experiment.buy", (log_time, 1)),
-            ("account.experiment.sell", (log_time, 1))
-        ]
-        self.graphite.batch_send_tuples(metrics)
-        logger.info("Experimental end!!!")
-
         tuples = []
         sleep_seconds_per_request = 2.0
 
@@ -353,19 +343,19 @@ class AccountMonitor:
                 each_timestamp = int(parse(each_trade["timestamp"]).timestamp())
                 each_price = float(each_trade["price"])
                 if each_trade["side"] == "Buy":
-                    tuples.append(("account.tradex.buy", (each_timestamp, each_price)))
+                    tuples.append(("account.trade.buy", (each_timestamp, each_price)))
                     buys += 1
                 else:
-                    tuples.append(("account.tradex.sell", (each_timestamp, each_price)))
+                    tuples.append(("account.trade.sell", (each_timestamp, each_price)))
                     sells += 1
-            tuples.append(("account.tradex-count.minutely.buy", (target_minute.time(), buys)))
-            tuples.append(("account.tradex-count.minutely.sell", (target_minute.time(), sells)))
+            minutely_unix_time = int(target_minute.timestamp())
+            tuples.append(("account.trade-count.minutely.buy", (minutely_unix_time, buys)))
+            tuples.append(("account.trade-count.minutely.sell", (minutely_unix_time, sells)))
             sleep(sleep_seconds_per_request)
             target_minute = target_minute + timedelta(minutes=1)
         self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
         if 0 < len(tuples):
             logger.info("Logging %d minutely trade data.", len(tuples))
-            logger.info(str(tuples)) # TODO erase
             self.graphite.batch_send_tuples(tuples)
         else:
             logger.info("No minutely trades to log.")
