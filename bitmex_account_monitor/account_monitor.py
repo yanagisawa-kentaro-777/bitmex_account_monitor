@@ -336,24 +336,25 @@ class AccountMonitor:
         while target_minute <= end_minute:
             trades_of_minute = self._get_trade_history_of_minute(
                 target_minute.year, target_minute.month, target_minute.day, target_minute.hour, target_minute.minute)
+            logger.info("%d trades got.", len(trades_of_minute))
             buys = 0
             sells = 0
             for each_trade in trades_of_minute:
                 each_timestamp = int(parse(each_trade["timestamp"]).timestamp())
                 each_price = float(each_trade["price"])
                 if each_trade["side"] == "Buy":
-                    tuples.append(("account.trade.buy", (each_timestamp, each_price)))
+                    tuples.append(("account.tradex.buy", (each_timestamp, each_price)))
                     buys += 1
                 else:
-                    tuples.append(("account.trade.sell", (each_timestamp, each_price)))
+                    tuples.append(("account.tradex.sell", (each_timestamp, each_price)))
                     sells += 1
-            tuples.append(("account.trade-count.minutely.buy", (target_minute.time(), buys)))
-            tuples.append(("account.trade-count.minutely.sell", (target_minute.time(), sells)))
+            tuples.append(("account.tradex-count.minutely.buy", (target_minute.time(), buys)))
+            tuples.append(("account.tradex-count.minutely.sell", (target_minute.time(), sells)))
             sleep(sleep_seconds_per_request)
             target_minute = target_minute + timedelta(minutes=1)
         self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
         if 0 < len(tuples):
-            logger.info("Logging %d minutely trades.", len(tuples) // 2)
+            logger.info("Logging %d minutely trade data.", len(tuples))
             self.graphite.batch_send_tuples(tuples)
         else:
             logger.info("No minutely trades to log.")
