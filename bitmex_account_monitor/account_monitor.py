@@ -14,7 +14,7 @@ import pymongo
 import redis
 
 from pybitmex import *
-from graphitefeeder import GraphiteClient
+from graphitepusher import GraphiteClient
 
 from bitmex_account_monitor.utils import log, constants
 from bitmex_account_monitor.utils.settings import settings
@@ -324,6 +324,16 @@ class AccountMonitor:
             logger.info("No hourly trades to log.")
 
     def log_minutely_trades_of_account(self, std_datetime):
+        # TODO erase.
+        logger.info("Experimental start!!!")
+        log_time = now().time()
+        metrics = [
+            ("account.experiment.buy", (log_time, 1)),
+            ("account.experiment.sell", (log_time, 1))
+        ]
+        self.graphite.batch_send_tuples(metrics)
+        logger.info("Experimental end!!!")
+
         tuples = []
         sleep_seconds_per_request = 2.0
 
@@ -355,6 +365,7 @@ class AccountMonitor:
         self._save_last_trade_logged_minute(target_minute - timedelta(minutes=1))
         if 0 < len(tuples):
             logger.info("Logging %d minutely trade data.", len(tuples))
+            logger.info(str(tuples)) # TODO erase
             self.graphite.batch_send_tuples(tuples)
         else:
             logger.info("No minutely trades to log.")
