@@ -294,35 +294,6 @@ class AccountMonitor:
     def _load_last_trade_logged_hour(self):
         return self._load_last_trade_logged_time('hour')
 
-    # TODO erase this?
-    def log_hourly_trade_count_of_account(self, std_datetime):
-        tuples = []
-        sleep_seconds_per_request = 2.0
-
-        last_logged_hour = self._load_last_trade_logged_hour()
-        if last_logged_hour is not None:
-            target_hour = last_logged_hour + timedelta(hours=1)
-        else:
-            target_hour = self._round_datetime_to_hour(std_datetime - timedelta(hours=3))
-        end_hour = std_datetime - timedelta(hours=1)
-        while target_hour <= end_hour:
-            each_timestamp = int(target_hour.timestamp())
-            trades_of_hour = self._get_trade_history_of_hour(
-                target_hour.year, target_hour.month, target_hour.day, target_hour.hour)
-            num_buys = len([t for t in trades_of_hour if t["side"] == "Buy"])
-            num_sells = len([t for t in trades_of_hour if t["side"] == "Sell"])
-            tuples.append(("account.trade-count.hourly.buy", (each_timestamp, num_buys)))
-            tuples.append(("account.trade-count.hourly.sell", (each_timestamp, num_sells)))
-
-            sleep(sleep_seconds_per_request)
-            target_hour = target_hour + timedelta(hours=1)
-        self._save_last_trade_logged_hour(target_hour - timedelta(hours=1))
-        if 0 < len(tuples):
-            logger.info("Logging %d hourly trades.", len(tuples))
-            self.graphite.batch_send_tuples(tuples)
-        else:
-            logger.info("No hourly trades to log.")
-
     def log_minutely_trades_of_account(self, std_datetime):
         tuples = []
         sleep_seconds_per_request = 2.0
@@ -371,6 +342,13 @@ class AccountMonitor:
                     "LOOP[%s] (%s) {INTERVAL: %.2f; ACCOUNT: %s}",
                     loop_id, constants.VERSION, settings.LOOP_INTERVAL_SECONDS, settings.BITMEX_ACCOUNT_ID
                 )
+                if self.bitmex_client.is_market_in_normal_state():
+                    logger.warning("[%s] Market state error: %s", loop_id, self.bitmex_client.ws_market_state())
+                    break
+                if self.bitmex_client.ws_market_state() == "Closed":
+                    logger.info("[%s] Market is closed.", loop_id)
+                    sleep(settings.LOOP_INTERVAL_SECONDS / 2.0)
+                    continue
 
                 log_data = []
                 # Recognize our current position. This value is to be negative when we have a short position.
@@ -413,7 +391,6 @@ class AccountMonitor:
 
                 trades_std_time = now()
                 self.log_minutely_trades_of_account(trades_std_time)
-                self.log_hourly_trade_count_of_account(trades_std_time)
 
                 if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
                     self.executor.submit(self._refresh_bitmex_client)
