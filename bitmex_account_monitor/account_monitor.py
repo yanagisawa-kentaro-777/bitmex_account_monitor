@@ -342,7 +342,7 @@ class AccountMonitor:
                     "LOOP[%s] (%s) {INTERVAL: %.2f; ACCOUNT: %s}",
                     loop_id, constants.VERSION, settings.LOOP_INTERVAL_SECONDS, settings.BITMEX_ACCOUNT_ID
                 )
-                if self.bitmex_client.is_market_in_normal_state():
+                if not self.bitmex_client.is_market_in_normal_state():
                     logger.warning("[%s] Market state error: %s", loop_id, self.bitmex_client.ws_market_state())
                     break
                 if self.bitmex_client.ws_market_state() == "Closed":
