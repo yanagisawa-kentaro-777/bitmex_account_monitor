@@ -132,13 +132,16 @@ class AccountMonitor:
         sleep(1)
         sys.exit()
 
-    def _is_age_less_or_equal(self, table_name: str, std_time: datetime, max_allowable_seconds: float):
+    def _wait_while_refreshing(self):
         count = 0
         while self.is_refreshing:
             count += 1
             if (settings.MAX_REFRESH_WAIT_SECONDS * 10) < count:
                 raise Exception("BitMEX Client Refresh ERROR?")
             sleep(0.1)
+
+    def _is_age_less_or_equal(self, table_name: str, std_time: datetime, max_allowable_seconds: float):
+        self._wait_while_refreshing()
 
         ws_updated = self.bitmex_client.get_last_ws_update(table_name)
         if not ws_updated:
@@ -331,77 +334,93 @@ class AccountMonitor:
         else:
             logger.info("No minutely trades to log.")
 
+    @staticmethod
+    def _print_error(e, warn):
+        import sys
+        import traceback
+        traceback.print_exc(file=sys.stdout)
+
+        if warn:
+            logger.warning("Error: %s" % str(e))
+        else:
+            logger.info("Error: %s" % str(e))
+        logger.info(sys.exc_info())
+
     def run_loop(self):
         loop_count = 0
         try:
             while self.is_running:
-                loop_start_time = now()
-                loop_id = loop_start_time.strftime("%Y%m%d%H%M%S_") + str(loop_count)
-                loop_count += 1
-                logger.info(
-                    "LOOP[%s] (%s) {INTERVAL: %.2f; ACCOUNT: %s}",
-                    loop_id, constants.VERSION, settings.LOOP_INTERVAL_SECONDS, settings.BITMEX_ACCOUNT_ID
-                )
-                if not self.bitmex_client.is_market_in_normal_state():
-                    logger.warning("[%s] Market state error: %s", loop_id, self.bitmex_client.ws_market_state())
-                    break
-                if self.bitmex_client.ws_market_state() == "Closed":
-                    logger.info("[%s] Market is closed.", loop_id)
-                    sleep(settings.LOOP_INTERVAL_SECONDS / 2.0)
-                    continue
+                try:
+                    self._wait_while_refreshing()
 
-                log_data = []
-                # Recognize our current position. This value is to be negative when we have a short position.
-                position_std_time = now()
-                current_position = self.read_current_position(loop_id, position_std_time)
-                serialized_position = self.serialize_dict('position', current_position, position_std_time)
-                logger.info("[%s] Current position is read: %s", loop_id, serialized_position)
-                self.redis.set(settings.REDIS_ACCOUNT_POSITIONS_KEY, serialized_position)
-                logger.info("[%s] Current position written to redis.", loop_id)
+                    loop_start_time = now()
+                    loop_id = loop_start_time.strftime("%Y%m%d%H%M%S_") + str(loop_count)
+                    loop_count += 1
+                    logger.info(
+                        "LOOP[%s] (%s) {INTERVAL: %.2f; ACCOUNT: %s}",
+                        loop_id, constants.VERSION, settings.LOOP_INTERVAL_SECONDS, settings.BITMEX_ACCOUNT_ID
+                    )
+                    if not self.bitmex_client.is_market_in_normal_state():
+                        logger.warning("[%s] Market state error: %s", loop_id, self.bitmex_client.ws_market_state())
+                        break
+                    if self.bitmex_client.ws_market_state() == "Closed":
+                        logger.info("[%s] Market is closed.", loop_id)
+                        sleep(settings.LOOP_INTERVAL_SECONDS / 2.0)
+                        continue
 
-                log_data.append(("account.position", current_position))
+                    log_data = []
+                    # Recognize our current position. This value is to be negative when we have a short position.
+                    position_std_time = now()
+                    current_position = self.read_current_position(loop_id, position_std_time)
+                    serialized_position = self.serialize_dict('position', current_position, position_std_time)
+                    logger.info("[%s] Current position is read: %s", loop_id, serialized_position)
+                    self.redis.set(settings.REDIS_ACCOUNT_POSITIONS_KEY, serialized_position)
+                    logger.info("[%s] Current position written to redis.", loop_id)
 
-                open_orders_std_time = now()
-                open_orders = self.read_open_orders(loop_id, open_orders_std_time)
-                open_orders_dict = self.open_orders_to_dict(open_orders)
-                serialized_open_orders = self.serialize_dict('openOrders', open_orders_dict, open_orders_std_time)
-                logger.info("[%s] Open orders are read: %d", loop_id, len(open_orders.bids) + len(open_orders.asks))
-                self.redis.set(settings.REDIS_ACCOUNT_OPEN_ORDERS_KEY, serialized_open_orders)
-                logger.info("[%s] Open orders written to redis.", loop_id)
+                    log_data.append(("account.position", current_position))
 
-                log_data.append(("account.open-bids", len(open_orders.bids)))
-                log_data.append(("account.open-asks", len(open_orders.asks)))
+                    open_orders_std_time = now()
+                    open_orders = self.read_open_orders(loop_id, open_orders_std_time)
+                    open_orders_dict = self.open_orders_to_dict(open_orders)
+                    serialized_open_orders = self.serialize_dict('openOrders', open_orders_dict, open_orders_std_time)
+                    logger.info("[%s] Open orders are read: %d", loop_id, len(open_orders.bids) + len(open_orders.asks))
+                    self.redis.set(settings.REDIS_ACCOUNT_OPEN_ORDERS_KEY, serialized_open_orders)
+                    logger.info("[%s] Open orders written to redis.", loop_id)
 
-                balance_std_time = now()
-                balances = self.read_balances(loop_id, balance_std_time)
-                serialized_balances = self.serialize_dict('balances', balances, balance_std_time)
-                logger.info("[%s] Balances are read: %s", loop_id, serialized_balances)
-                self.redis.set(settings.REDIS_ACCOUNT_BALANCES_KEY, serialized_balances)
-                logger.info("[%s] Balances written to redis.", loop_id)
+                    log_data.append(("account.open-bids", len(open_orders.bids)))
+                    log_data.append(("account.open-asks", len(open_orders.asks)))
 
-                satoshi_to_btc = 100000000.0
-                log_data.append(("account.withdrawable-btc-balance", balances["withdrawableBalance"] / satoshi_to_btc))
-                log_data.append(("account.wallet-btc-balance", balances["walletBalance"] / satoshi_to_btc))
+                    balance_std_time = now()
+                    balances = self.read_balances(loop_id, balance_std_time)
+                    serialized_balances = self.serialize_dict('balances', balances, balance_std_time)
+                    logger.info("[%s] Balances are read: %s", loop_id, serialized_balances)
+                    self.redis.set(settings.REDIS_ACCOUNT_BALANCES_KEY, serialized_balances)
+                    logger.info("[%s] Balances written to redis.", loop_id)
 
-                loop_elapsed_seconds = (now() - loop_start_time).total_seconds()
-                logger.info("LOOP[%s] (SUMMARY) ElapsedSeconds: %.2f", loop_id, loop_elapsed_seconds)
+                    satoshi_to_btc = 100000000.0
+                    log_data.append(
+                        ("account.withdrawable-btc-balance", balances["withdrawableBalance"] / satoshi_to_btc))
+                    log_data.append(("account.wallet-btc-balance", balances["walletBalance"] / satoshi_to_btc))
 
-                log_data.append(("system.account-monitor.operation.loop-time", loop_elapsed_seconds))
-                self.graphite.batch_send(log_data)
+                    loop_elapsed_seconds = (now() - loop_start_time).total_seconds()
+                    logger.info("LOOP[%s] (SUMMARY) ElapsedSeconds: %.2f", loop_id, loop_elapsed_seconds)
 
-                trades_std_time = now()
-                self.log_minutely_trades_of_account(trades_std_time)
+                    log_data.append(("system.account-monitor.operation.loop-time", loop_elapsed_seconds))
+                    self.graphite.batch_send(log_data)
 
-                if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
+                    trades_std_time = now()
+                    self.log_minutely_trades_of_account(trades_std_time)
+
+                    if settings.WS_REFRESH_INTERVAL < (now() - self.bitmex_client_refreshed_time).total_seconds():
+                        self.executor.submit(self._refresh_bitmex_client)
+                    sleep(settings.LOOP_INTERVAL_SECONDS)
+                except RestClientError as ex:
+                    logger.info("Rest client error.")
+                    self._print_error(ex, warn=False)
                     self.executor.submit(self._refresh_bitmex_client)
-                sleep(settings.LOOP_INTERVAL_SECONDS)
+                    sleep(settings.LOOP_INTERVAL_SECONDS)
         except Exception as e:
-            import sys
-            import traceback
-            traceback.print_exc(file=sys.stdout)
-
-            logger.warning("Error: %s" % str(e))
-            logger.info(sys.exc_info())
+            self._print_error(e, warn=True)
         finally:
             self.exit()
 
