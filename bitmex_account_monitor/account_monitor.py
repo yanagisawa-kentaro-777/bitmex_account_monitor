@@ -106,7 +106,7 @@ class AccountMonitor:
         except Exception as _:
             pass
 
-        logger.info('SHUTTING DOWN BitMEX Market Maker. Version %s' % constants.VERSION)
+        logger.info('SHUTTING DOWN BitMEX Account Monitor. Version %s' % constants.VERSION)
         try:
             self.mongo_client.close()
         except Exception as e:
